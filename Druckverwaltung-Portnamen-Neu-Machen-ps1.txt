@@ -1,0 +1,26 @@
+# Aufräumen von Portnamen auf Drucker-Server
+# Portnamen sollen ein einheitliches Namenschema nutzen
+
+# Servernamen eingeben
+$server = "Server"
+
+# Alle echten Netzwerkdrucker holen (lokale Standardports ignorieren)
+$allPrinters = Get-Printer -ComputerName $server | Where-Object { $_.PortName -notlike "LPT*" -and $_.PortName -notlike "COM*" -and $_.PortName -notlike "FILE:" -and $_.PortName -notlike "PORTPROMPT*" }
+
+# Die Schleife verarbeitet jeden Drucker automatisch
+foreach ($printer in $allPrinters) {
+    
+    $printername = $printer.Name
+    
+    # IP-Adresse/Host des alten Ports auslesen
+    $reply = (Get-PrinterPort -ComputerName $server -Name $printer.PortName).PrinterHostAddress
+    
+    # Neuen Port erstellen (Name = Druckername)
+    Add-PrinterPort -ComputerName $server -Name $printername -PrinterHostAddress $reply -PortNumber 9100
+    
+    # Drucker auf den neuen Port umstellen
+    Set-Printer -ComputerName $server -Name $printername -PortName $printername
+    
+    # Alten Port löschen
+    Remove-PrinterPort -ComputerName $server -Name $printer.PortName
+}
