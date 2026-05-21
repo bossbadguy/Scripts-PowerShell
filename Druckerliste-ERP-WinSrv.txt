@@ -1,0 +1,122 @@
+### Wiki-Seite: Druckerlinkliste generieren
+### Die Liste ist autom. formatiert und enthält Windows-Namen, IP, und ERP-Namen der Drucker
+
+### Schritt 1
+
+# Die Drucker von der CSV-Export aus dem ERP-Server
+# Nutzt DNS-Auflösung um Namen zu bekommen
+
+# Configuration
+$InputFile  = "C:\Temp\Druckeras400.csv" # Druckerliste von ERP
+$OutputFile = "C:\Temp\printernodns.txt" # Printer ohne DNS-Eintrag
+$DNSFile = "C:\Temp\DrDNS.csv"
+$ResolvedPrinters    = @()
+
+# Load CSV
+$PrinterList = Import-Csv -Path $InputFile -Delimiter ';'
+
+foreach ($Printer in $PrinterList) {
+    $IP   = $Printer.IPAddress
+    $Name = $Printer.ERPName
+    
+    try {
+        # Attempt Reverse DNS lookup (PTR)
+        $DnsRecord = [System.Net.Dns]::GetHostEntry($IP)
+        
+        # If successful, add to our success list
+        $ResolvedPrinters += [PSCustomObject]@{
+            ERPName = $Name
+            IP      = $IP
+            FQDN    = $DnsRecord.HostName
+        }
+        Write-Host "Found: $IP -> $($DnsRecord.HostName)" -ForegroundColor Green
+    }
+    catch {
+        # If DNS lookup fails
+        $NoDnsEntry = "Printer: $Name , IP: $IP"
+        $NoDnsEntry | Out-File -FilePath $OutputFile -Append
+        Write-Host "Missing: $IP (Logged to file)" -ForegroundColor Yellow
+    }
+}
+
+# Optional: View the successful resolutions in a table
+#$ResolvedPrinters | Out-GridView -Title "Resolved Printers"
+$ResolvedPrinters | Export-CSV -Path $DNSFile
+
+
+### Schritt zwei: Nach 1-IWM-DNS durchgelaufen ist
+
+# 1. Load your ERP CSV data first
+# Assumes headers: ERPName, IPAddress
+$CsvPath = "C:\Temp\DrDNS.csv"
+$ERPLookup = Import-Csv -Path $CsvPath -Delimiter ','
+
+# Printer von Druckserver holen 
+$drksrv = @("srv1","srv2","srv3")
+$outfile = "C:\Temp\druckerliste_wiki.txt"
+Remove-Item $outfile -ErrorAction SilentlyContinue
+
+foreach ($srv in $drksrv) {
+    Add-Content $outfile "## $srv "
+
+    try {
+        $srvPrinters = Get-Printer -ComputerName $srv -ErrorAction Stop |
+            Where-Object { $_.Name -like "HPLJ*" } |
+            ForEach-Object {
+                $CurrentPrinter = $_
+                
+                # 1. Load CSV (Using comma delimiter for the exported file)
+$ERPLookup = Import-Csv -Path $CsvPath -Delimiter ','
+
+# ... inside your ForEach loop ...
+
+$CurrentName = $CurrentPrinter.Name.Trim().ToLower()
+
+# 2. Advanced partial match: Does the FQDN column contain the Printer Name?
+$Match = $ERPLookup | Where-Object { 
+    $_.FQDN.ToLower().Contains($CurrentName) 
+}
+
+# 3. Final assignment
+$ERPValue = if ($Match) { $Match.ERPName } else { "Kein ERP Eintrag" }
+
+# DEBUG: Uncomment the line below if you still get "Kein ERP Eintrag" to see why
+# Write-Host "Searching for: $CurrentName in CSV FQDNs..." -ForegroundColor Gray
+             
+                # 3. Build the object with the extra ERP Column
+                [PSCustomObject]@{
+                    ERPName             = $ERPValue
+                    Name                = $CurrentPrinter.Name
+                    Location            = "$($CurrentPrinter.Location)."
+                    AdminConsole        = "[Admin Console](https://$($CurrentPrinter.Name))"
+                    RemotePanel         = "[Remote Panel](https://$($CurrentPrinter.Name)/hp/device/RemoteControlPanel/Index?private=1)"
+                    Geräteinformationen = "[PrintCom ID und Infos](https://$($CurrentPrinter.Name)/hp/device/DeviceInformation/View)"
+                }
+            } | Sort-Object Name
+
+        if ($srvPrinters) {
+            # Header - Added ERP Column
+            Add-Content $outfile "|ERP Name|Name|Location|Admin Console|Remote Panel|Geräteinformationen|"
+            Add-Content $outfile "|-|-|-|-|-|-|"
+
+            foreach ($p in $srvPrinters) {
+                # Clean up pipes for Wiki formatting
+                $line = "|{0}|{1}|{2}|{3}|{4}|{5}|" -f ($p.ERPName -replace '\|', '-'), 
+                                                       ($p.Name -replace '\|', '-'), 
+                                                       ($p.Location -replace '\|', '-'), 
+                                                       $p.AdminConsole, 
+                                                       $p.RemotePanel, 
+                                                       $p.Geräteinformationen
+                Add-Content $outfile $line
+            }
+        }
+        else {
+            Add-Content $outfile "|No printers found|||||"
+        }
+    }
+    catch {
+        Add-Content $outfile "|Failed to connect to $srv : $($_.Exception.Message)|||||"
+    }
+
+    Add-Content $outfile "`n"
+}
